@@ -1,0 +1,5 @@
+{
+  "command": "run",
+  "no_container": true,
+  "exec": "echo hello world"
+}
