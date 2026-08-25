@@ -75,6 +75,22 @@ class DockerIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(run_result.action, "passed")
 
+        log_path = f"/tmp/agent-eye-test-{uuid.uuid4().hex}.log"
+        try:
+            logged = run(
+                RunRequest(
+                    exec_command="printf container-log",
+                    container=CONTAINER_NAME,
+                    log=log_path,
+                )
+            )
+            self.assertEqual(logged.action, "passed")
+            content = _docker("exec", CONTAINER_NAME, "cat", log_path)
+            self.assertEqual(content.returncode, 0)
+            self.assertEqual(content.stdout, "container-log")
+        finally:
+            _docker("exec", CONTAINER_NAME, "rm", "-f", log_path)
+
         tag = f"eye-integration-{uuid.uuid4().hex}"
         first = ensure(
             RunRequest(

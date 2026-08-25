@@ -13,13 +13,108 @@ from agent_eye.runner import CommandResult
 
 
 class CliTests(unittest.TestCase):
+    def test_all_public_commands_are_registered(self) -> None:
+        parser = cli.build_parser()
+        subparsers = next(
+            action
+            for action in parser._actions
+            if isinstance(action, cli.argparse._SubParsersAction)
+        )
+        self.assertEqual(
+            set(subparsers.choices),
+            {
+                "npu_status",
+                "run",
+                "ensure",
+                "kill",
+                "from_file",
+                "test",
+                "version",
+                "help",
+            },
+        )
+
     def test_version_command_contains_config_directory(self) -> None:
         output = StringIO()
         with redirect_stdout(output):
             status = cli.main(["version"])
         self.assertEqual(status, 0)
-        self.assertIn("eye 0.4.1", output.getvalue())
+        self.assertIn("eye 0.5.0", output.getvalue())
         self.assertIn("config:", output.getvalue())
+
+    def test_version_option_is_supported(self) -> None:
+        output = StringIO()
+        with redirect_stdout(output), self.assertRaises(SystemExit) as raised:
+            cli.main(["--version"])
+        self.assertEqual(raised.exception.code, 0)
+        self.assertIn("eye 0.5.0", output.getvalue())
+
+    def test_help_command_supports_topics(self) -> None:
+        output = StringIO()
+        with redirect_stdout(output):
+            status = cli.main(["help", "ensure"])
+        self.assertEqual(status, 0)
+        self.assertIn("--tag", output.getvalue())
+
+    def test_help_option_is_supported(self) -> None:
+        output = StringIO()
+        with redirect_stdout(output), self.assertRaises(SystemExit) as raised:
+            cli.main(["--help"])
+        self.assertEqual(raised.exception.code, 0)
+        self.assertIn("npu_status", output.getvalue())
+
+    @patch("agent_eye.cli.npu_status.run", return_value=0)
+    def test_npu_status_command_routes_to_config(self, mocked_status) -> None:
+        self.assertEqual(cli.main(["npu_status"]), 0)
+        mocked_status.assert_called_once_with()
+
+    @patch("agent_eye.cli.run_test_directory", return_value=0)
+    def test_test_command_routes_to_repository_suite(self, mocked_test) -> None:
+        self.assertEqual(cli.main(["test"]), 0)
+        mocked_test.assert_called_once()
+
+    @patch("agent_eye.cli.run_file", return_value=CommandResult(0, "passed"))
+    def test_from_file_command_routes_one_file(self, mocked_file) -> None:
+        self.assertEqual(cli.main(["from_file", "task.json"]), 0)
+        self.assertEqual(mocked_file.call_args.args[0], "task.json")
+
+    @patch("agent_eye.cli.run", return_value=CommandResult(0, "passed"))
+    def test_run_command_routes_local_request(self, mocked_run) -> None:
+        self.assertEqual(
+            cli.main(["run", "--no-container", "--exec", "printf hello"]), 0
+        )
+        request = mocked_run.call_args.args[0]
+        self.assertIsNone(request.container)
+        self.assertEqual(request.exec_command, "printf hello")
+
+    @patch("agent_eye.cli.ensure", return_value=CommandResult(0, "started"))
+    def test_ensure_command_routes_detached_request(self, mocked_ensure) -> None:
+        self.assertEqual(
+            cli.main(
+                [
+                    "ensure",
+                    "--no-container",
+                    "--tag",
+                    "worker",
+                    "--exec",
+                    "sleep 5",
+                    "--detach",
+                ]
+            ),
+            0,
+        )
+        request = mocked_ensure.call_args.args[0]
+        self.assertEqual(request.tag, "worker")
+        self.assertTrue(request.detach)
+
+    @patch("agent_eye.cli.kill_task", return_value=CommandResult(0, "killed"))
+    def test_kill_command_routes_container_request(self, mocked_kill) -> None:
+        self.assertEqual(
+            cli.main(["kill", "--container", "worker", "--tag", "task"]), 0
+        )
+        request = mocked_kill.call_args.args[0]
+        self.assertEqual(request.container, "worker")
+        self.assertEqual(request.tag, "task")
 
     def test_ensure_file_requires_tag(self) -> None:
         with self.assertRaisesRegex(ValueError, "requires field 'tag'"):

@@ -115,61 +115,19 @@ def _local_process_tree_linux(root_pid: int) -> list[ProcessInfo] | None:
         seen.add(pid)
         inspected = _linux_process(pid)
         if inspected is None:
-            if pid == root_pid:
-                return None
-            continue
+            # 任一已发现进程无法审查时都拒绝继续，避免遗漏仍存活的子进程。
+            return None
         process, children = inspected
         processes.append(process)
         pending.extend(children)
     return processes
 
 
-def _local_process_tree_ps(root_pid: int) -> list[ProcessInfo] | None:
-    try:
-        completed = subprocess.run(
-            ["ps", "-axo", "pid=,ppid=,uid=,comm=,command="],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    except OSError:
-        return None
-    if completed.returncode != 0:
-        return None
-
-    all_processes: dict[int, ProcessInfo] = {}
-    children: dict[int, list[int]] = {}
-    for line in completed.stdout.splitlines():
-        fields = line.strip().split(maxsplit=4)
-        if len(fields) < 4:
-            continue
-        try:
-            pid, ppid, uid = (int(value) for value in fields[:3])
-        except ValueError:
-            continue
-        command = fields[4] if len(fields) == 5 else fields[3]
-        all_processes[pid] = ProcessInfo(pid, ppid, uid, fields[3], command)
-        children.setdefault(ppid, []).append(pid)
-
-    if root_pid not in all_processes:
-        return None
-    result: list[ProcessInfo] = []
-    pending = deque([root_pid])
-    seen: set[int] = set()
-    while pending:
-        pid = pending.popleft()
-        if pid in seen or pid not in all_processes:
-            continue
-        seen.add(pid)
-        result.append(all_processes[pid])
-        pending.extend(children.get(pid, ()))
-    return result
-
-
 def _local_process_tree(root_pid: int) -> list[ProcessInfo] | None:
-    if Path("/proc").is_dir():
-        return _local_process_tree_linux(root_pid)
-    return _local_process_tree_ps(root_pid)
+    # 不使用可能截断命令行的 ps。缺少 /proc 时采用 fail-closed 策略。
+    if not Path("/proc").is_dir():
+        return None
+    return _local_process_tree_linux(root_pid)
 
 
 def _container_process_tree(
@@ -177,6 +135,7 @@ def _container_process_tree(
 ) -> list[ProcessInfo] | None:
     script = r'''
 set -eu
+[ -d /proc ] || exit 4
 pending="$1"
 seen=" "
 while [ -n "$pending" ]; do
@@ -186,13 +145,16 @@ while [ -n "$pending" ]; do
     pending="$*"
     case "$seen" in *" $current "*) continue ;; esac
     seen="$seen$current "
-    [ -r "/proc/$current/status" ] || continue
+    [ -r "/proc/$current/status" ] || exit 4
+    [ -r "/proc/$current/comm" ] || exit 4
+    [ -r "/proc/$current/cmdline" ] || exit 4
+    [ -r "/proc/$current/task/$current/children" ] || exit 4
     name=$(cat "/proc/$current/comm")
     ppid=$(awk '/^PPid:/ {print $2}' "/proc/$current/status")
     uid=$(awk '/^Uid:/ {print $2}' "/proc/$current/status")
     command=$(tr '\000' ' ' < "/proc/$current/cmdline")
     printf '%s\t%s\t%s\t%s\t%s\n' "$current" "$ppid" "$uid" "$name" "$command"
-    children=$(cat "/proc/$current/task/$current/children" 2>/dev/null || true)
+    children=$(cat "/proc/$current/task/$current/children")
     pending="$pending $children"
 done
 '''

@@ -1,14 +1,27 @@
 from __future__ import annotations
 
+import os
+import signal
+import tempfile
 import unittest
+import uuid
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from unittest.mock import call, patch
 
-from agent_eye.killer import KillRequest, ProcessInfo, kill
+from agent_eye.killer import KillRequest, ProcessInfo, _local_process_tree, kill
+from agent_eye import runner
 
 
 class KillSafetyTests(unittest.TestCase):
+    @patch("agent_eye.killer._local_process_tree_linux")
+    @patch("agent_eye.killer.Path.is_dir", return_value=False)
+    def test_local_kill_refuses_when_proc_is_unavailable(
+        self, _mocked_is_dir, mocked_linux_tree
+    ) -> None:
+        self.assertIsNone(_local_process_tree(123))
+        mocked_linux_tree.assert_not_called()
+
     @patch("agent_eye.killer.find_tagged_pids", return_value=(1, []))
     def test_missing_tag_is_a_successful_skip(self, _mocked_find) -> None:
         output = StringIO()
@@ -72,6 +85,18 @@ class KillSafetyTests(unittest.TestCase):
         self.assertEqual(result.returncode, 4)
         mocked_kill.assert_not_called()
 
+    @patch("agent_eye.killer._kill_local")
+    @patch("agent_eye.killer._local_process_tree", return_value=None)
+    @patch("agent_eye.killer.find_tagged_pids", return_value=(0, [26]))
+    def test_incomplete_proc_review_never_sends_a_signal(
+        self, _mocked_find, _mocked_tree, mocked_kill
+    ) -> None:
+        with redirect_stderr(StringIO()) as output:
+            result = kill(KillRequest(tag="worker"))
+        self.assertEqual(result.returncode, 4)
+        self.assertIn("reason=safety_review_failed", output.getvalue())
+        mocked_kill.assert_not_called()
+
     @patch("agent_eye.killer.os.geteuid", return_value=1000)
     @patch("agent_eye.killer.os.kill")
     @patch("agent_eye.killer._local_process_tree")
@@ -104,6 +129,38 @@ class KillSafetyTests(unittest.TestCase):
             result = kill(KillRequest(tag="worker", container="eye_test_worker"))
         self.assertEqual(result.action, "killed")
         mocked_kill.assert_called_once_with("eye_test_worker", processes)
+
+
+class LocalKillIntegrationTests(unittest.TestCase):
+    @unittest.skipUnless(os.path.isdir("/proc"), "local kill requires /proc")
+    def test_real_tagged_process_can_be_killed(self) -> None:
+        """local · safe kill integration"""
+        tag = f"agent-eye-kill-test-{uuid.uuid4().hex}"
+        pid: int | None = None
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "agent_eye.runner.RUNTIME_DIR", directory
+        ):
+            started = runner.run(
+                runner.RunRequest(
+                    exec_command="sleep 30",
+                    tag=tag,
+                    detach=True,
+                    log=f"{directory}/task.log",
+                )
+            )
+            pid = started.pid
+            self.assertEqual(started.action, "started")
+            self.assertIsNotNone(pid)
+            try:
+                with redirect_stdout(StringIO()):
+                    result = kill(KillRequest(tag=tag))
+                self.assertEqual(result.action, "killed")
+            finally:
+                if pid is not None:
+                    try:
+                        os.killpg(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
 
 
 if __name__ == "__main__":

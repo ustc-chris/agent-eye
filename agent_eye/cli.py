@@ -83,7 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
     from_file_parser.add_argument("file", type=_non_empty, help="单任务 JSON 文件路径")
     _add_allow_argument(from_file_parser, suppress_default=True)
 
-    subparsers.add_parser("test", help="运行 test 目录内的全部 JSON 任务")
+    subparsers.add_parser("test", help="运行完整功能测试和 test 目录内的 JSON 任务")
     subparsers.add_parser("version", help="显示版本和仓库目录")
 
     help_parser = subparsers.add_parser("help", help="显示总帮助或子命令帮助")

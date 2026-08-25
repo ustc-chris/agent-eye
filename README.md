@@ -204,7 +204,7 @@ eye kill --container worker-0 --tag training-01
 1. 使用与 `ensure` 相同的方式查询 tag。
 2. 没有匹配时输出 `SKIPPED reason=tag_not_found`，返回 0。
 3. 只有恰好匹配一个 tag 包装进程时才继续；多个匹配返回 4，不发送信号。
-4. 递归读取包装进程及其所有子进程并执行安全审查。
+4. 只通过 `/proc` 递归读取包装进程及其所有子进程并执行安全审查，不调用 `ps`。
 5. 审查失败、UID 不匹配或命中保护名单时返回 4，不发送信号。
 6. 审查通过后从子进程到包装进程依次发送 `SIGTERM`。
 
@@ -222,7 +222,9 @@ systemd-networkd, systemd-resolved, systemd-timesyncd
 PID 0 和 PID 1 也始终受到保护。安全审查还会再次确认根进程命令行包含完整 tag，
 防止 PID 重用或状态文件异常。保护名单会检查整个任务子进程树，而不只检查带 tag
 的外层 Bash。container 和本地模式使用相同的安全规则，但容器 PID 只能在对应
-容器中查询和发送信号。
+容器中查询和发送信号。`kill` 要求目标环境提供可读的 `/proc`；如果 `/proc`
+不存在、权限不足，或者任一已发现进程无法完成审查，命令会返回失败且不发送信号。
+因此，本地 `kill` 不支持默认没有 `/proc` 的 macOS，其他命令不受影响。
 
 `kill` 同样受 `--allow` 限制，禁止时间内不会查询 PID 或发送信号。
 
@@ -303,20 +305,39 @@ eye from_file /absolute/path/to/task.json
 
 ## 测试和示例
 
-示例和测试统一放在 `test/` 目录。`eye test` 按文件名顺序运行所有 `*.json`：
+示例和测试统一放在 `test/` 目录。`eye test` 会先按文件名顺序运行全部 `*.json`，
+再运行全部 `test_*.py` 功能、安全和集成测试：
 
 ```bash
 eye test
 ```
 
-默认任务会：
+JSON 任务会：
 
-1. no-container 运行 `echo hello world`。
-2. detach 启动带 tag 的 `sleep 5`。
-3. 再次 ensure 相同 tag，预期显示 `SKIP`。
+1. 查询 NPU 状态；没有 `npu-smi` 时显示为跳过。
+2. no-container 运行 `echo hello world`。
+3. 使用隔离 tag detach 启动 `sleep 5`。
+4. 再次 ensure 相同 tag，预期显示为跳过。
 
-汇总会明确显示 `PASS`、`SKIP` 和 `FAIL`。这些 JSON 文件同时也是
-`from_file` 的示例。
+完整测试覆盖 `npu_status`、`run`、`ensure`、`kill`、`from_file`、`test`、
+`version`、`help`、`--allow`、tag、阻塞与 detach、日志、安装脚本、本地执行和
+容器执行。容器测试会验证 run、ensure、重复 tag 查询和安全 kill；Linux 主机还会
+实际启动并终止一个隔离的本地测试任务。这些 JSON 文件同时也是 `from_file` 示例。
+
+交互终端中，测试进度始终在同一行刷新，并以绿色、黄色和红色区分最终状态。完成后
+只展开失败项和跳过项，成功项仅计入汇总，不逐条显示。例如：
+
+```text
+Agent Eye Test  ✓ 38 passed  ○ 3 skipped  ✕ 0 failed
+
+SKIPPED
+  ○ task · 00_npu_status.json
+    npu-smi is unavailable
+```
+
+输出重定向到日志或 cron 时不会产生颜色和单行刷新控制符。设置标准环境变量
+`NO_COLOR=1` 可以仅关闭颜色。缺少 NPU、Docker、本地镜像或 `/proc` 等外部能力时，
+对应集成项会显示为跳过；其他测试仍会完整运行。
 
 标准库单元测试也在相同目录：
 
