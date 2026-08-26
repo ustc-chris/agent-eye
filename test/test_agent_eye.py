@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -13,6 +14,10 @@ from agent_eye.runner import CommandResult
 
 
 class CliTests(unittest.TestCase):
+    class _TerminalBuffer(StringIO):
+        def isatty(self) -> bool:
+            return True
+
     def test_all_public_commands_are_registered(self) -> None:
         parser = cli.build_parser()
         subparsers = next(
@@ -40,7 +45,7 @@ class CliTests(unittest.TestCase):
         with redirect_stdout(output):
             status = cli.main(["version"])
         self.assertEqual(status, 0)
-        self.assertIn("eye 0.5.0", output.getvalue())
+        self.assertIn("eye 1.0.0", output.getvalue())
         self.assertIn("config:", output.getvalue())
 
     def test_version_option_is_supported(self) -> None:
@@ -48,7 +53,35 @@ class CliTests(unittest.TestCase):
         with redirect_stdout(output), self.assertRaises(SystemExit) as raised:
             cli.main(["--version"])
         self.assertEqual(raised.exception.code, 0)
-        self.assertIn("eye 0.5.0", output.getvalue())
+        self.assertIn("eye 1.0.0", output.getvalue())
+
+    def test_help_and_version_use_color_only_in_an_interactive_terminal(self) -> None:
+        cases = (
+            (["--help"], True),
+            (["help", "run"], False),
+            (["version"], False),
+            (["--version"], True),
+        )
+        for arguments, exits in cases:
+            output = self._TerminalBuffer()
+            with patch.dict(os.environ, {}, clear=True), redirect_stdout(output):
+                if exits:
+                    with self.assertRaises(SystemExit):
+                        cli.main(arguments)
+                else:
+                    self.assertEqual(cli.main(arguments), 0)
+            self.assertIn("\033[", output.getvalue())
+
+            no_color_output = self._TerminalBuffer()
+            with patch.dict(os.environ, {"NO_COLOR": "1"}, clear=True), redirect_stdout(
+                no_color_output
+            ):
+                if exits:
+                    with self.assertRaises(SystemExit):
+                        cli.main(arguments)
+                else:
+                    self.assertEqual(cli.main(arguments), 0)
+            self.assertNotIn("\033[", no_color_output.getvalue())
 
     def test_help_command_supports_topics(self) -> None:
         output = StringIO()
@@ -93,7 +126,7 @@ class CliTests(unittest.TestCase):
     @patch("agent_eye.cli.run", return_value=CommandResult(0, "passed"))
     def test_run_command_routes_local_request(self, mocked_run) -> None:
         self.assertEqual(
-            cli.main(["run", "--no-container", "--exec", "printf hello"]), 0
+            cli.main(["run", "--exec", "printf hello"]), 0
         )
         request = mocked_run.call_args.args[0]
         self.assertIsNone(request.container)
@@ -105,7 +138,6 @@ class CliTests(unittest.TestCase):
             cli.main(
                 [
                     "ensure",
-                    "--no-container",
                     "--tag",
                     "worker",
                     "--exec",
@@ -133,21 +165,32 @@ class CliTests(unittest.TestCase):
             cli.execute_task(
                 {
                     "command": "ensure",
-                    "no_container": True,
                     "exec": "sleep 60",
                 }
             )
 
-    def test_task_requires_exactly_one_execution_target(self) -> None:
-        with self.assertRaisesRegex(ValueError, "exactly one"):
+    def test_removed_no_container_file_field_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unknown run task fields: no_container"):
             cli.execute_task(
                 {
                     "command": "run",
-                    "container": "worker",
                     "no_container": True,
                     "exec": "true",
                 }
             )
+
+    def test_removed_no_container_option_is_rejected(self) -> None:
+        error = StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            cli.main(["run", "--no-container", "--exec", "true"])
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("unrecognized arguments: --no-container", error.getvalue())
+
+    @patch("agent_eye.cli.run", return_value=CommandResult(0, "passed"))
+    def test_task_file_defaults_to_local_mode(self, mocked_run) -> None:
+        result = cli.execute_task({"command": "run", "exec": "true"})
+        self.assertEqual(result.action, "passed")
+        self.assertIsNone(mocked_run.call_args.args[0].container)
 
     @patch("agent_eye.cli.kill_task", return_value=CommandResult(0, "killed"))
     def test_kill_task_file_defaults_to_local_mode(self, mocked_kill) -> None:

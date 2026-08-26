@@ -13,6 +13,7 @@ from .file_runner import run_file, run_test_directory
 from .killer import KillRequest, kill as kill_task
 from .paths import CONFIG_DIR, REPOSITORY_DIR, TEST_DIR
 from .runner import CommandResult, RunRequest, ensure, run
+from .terminal import BLUE, BOLD, CYAN, DIM, ColorHelpFormatter, paint
 from .time_window import AllowSyntaxError, evaluate_allow
 
 
@@ -22,6 +23,17 @@ def version_text() -> str:
         f"home: {REPOSITORY_DIR}\n"
         f"config: {CONFIG_DIR}\n"
         f"test: {TEST_DIR}"
+    )
+
+
+def styled_version_text() -> str:
+    return "\n".join(
+        (
+            paint(f"eye {__version__}", BOLD, CYAN),
+            f"{paint('home:', DIM)} {paint(str(REPOSITORY_DIR), BLUE)}",
+            f"{paint('config:', DIM)} {paint(str(CONFIG_DIR), BLUE)}",
+            f"{paint('test:', DIM)} {paint(str(TEST_DIR), BLUE)}",
+        )
     )
 
 
@@ -45,7 +57,7 @@ class _VersionAction(argparse.Action):
         values: Any,
         option_string: str | None = None,
     ) -> None:
-        print(version_text())
+        print(styled_version_text())
         parser.exit()
 
 
@@ -53,6 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="eye",
         description="在宿主机或 Docker 容器中运行、守护和终止任务。",
+        formatter_class=ColorHelpFormatter,
     )
     parser.add_argument(
         "--version",
@@ -63,20 +76,28 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     npu_parser = subparsers.add_parser(
-        "npu_status", help="执行已配置的 NPU 状态查询"
+        "npu_status",
+        help="执行已配置的 NPU 状态查询",
+        formatter_class=ColorHelpFormatter,
     )
     _add_allow_argument(npu_parser, suppress_default=True)
 
-    run_parser = subparsers.add_parser("run", help="运行命令")
+    run_parser = subparsers.add_parser(
+        "run", help="运行命令", formatter_class=ColorHelpFormatter
+    )
     _add_run_arguments(run_parser, tag_required=False)
 
     ensure_parser = subparsers.add_parser(
-        "ensure", help="仅在 tag 不存在时运行命令"
+        "ensure",
+        help="仅在 tag 不存在时运行命令",
+        formatter_class=ColorHelpFormatter,
     )
     _add_run_arguments(ensure_parser, tag_required=True)
 
     kill_parser = subparsers.add_parser(
-        "kill", help="安全终止唯一 tag 对应的任务"
+        "kill",
+        help="安全终止唯一 tag 对应的任务",
+        formatter_class=ColorHelpFormatter,
     )
     kill_parser.add_argument(
         "--container", type=_non_empty, help="Docker 容器名称或 ID；省略时操作宿主机"
@@ -87,16 +108,30 @@ def build_parser() -> argparse.ArgumentParser:
     _add_allow_argument(kill_parser, suppress_default=True)
 
     from_file_parser = subparsers.add_parser(
-        "from_file", help="运行 JSON 文件描述的单个任务"
+        "from_file",
+        help="运行 JSON 文件描述的单个任务",
+        formatter_class=ColorHelpFormatter,
     )
     from_file_parser.add_argument("file", type=_non_empty, help="单任务 JSON 文件路径")
     _add_allow_argument(from_file_parser, suppress_default=True)
 
-    subparsers.add_parser("test", help="运行完整功能测试和 test 目录内的 JSON 任务")
-    subparsers.add_parser("version", help="显示版本和仓库目录")
-    subparsers.add_parser("doc", help="显示完整使用说明，适合 agent 直接阅读")
+    subparsers.add_parser(
+        "test",
+        help="运行完整功能测试和 test 目录内的 JSON 任务",
+        formatter_class=ColorHelpFormatter,
+    )
+    subparsers.add_parser(
+        "version", help="显示版本和仓库目录", formatter_class=ColorHelpFormatter
+    )
+    subparsers.add_parser(
+        "doc",
+        help="显示完整使用说明，适合 agent 直接阅读",
+        formatter_class=ColorHelpFormatter,
+    )
 
-    help_parser = subparsers.add_parser("help", help="显示总帮助或子命令帮助")
+    help_parser = subparsers.add_parser(
+        "help", help="显示总帮助或子命令帮助", formatter_class=ColorHelpFormatter
+    )
     help_parser.add_argument("topic", nargs="?", help="可选的子命令名称")
     return parser
 
@@ -120,12 +155,10 @@ def _add_allow_argument(
 
 
 def _add_run_arguments(parser: argparse.ArgumentParser, *, tag_required: bool) -> None:
-    target = parser.add_mutually_exclusive_group(required=True)
-    target.add_argument("--container", type=_non_empty, help="Docker 容器名称或 ID")
-    target.add_argument(
-        "--no-container",
-        action="store_true",
-        help="直接在宿主机运行",
+    parser.add_argument(
+        "--container",
+        type=_non_empty,
+        help="Docker 容器名称或 ID；省略时在宿主机运行",
     )
     parser.add_argument(
         "--exec",
@@ -210,7 +243,6 @@ def execute_task(task: Mapping[str, Any]) -> CommandResult:
     allowed = {
         "command",
         "container",
-        "no_container",
         "exec",
         "tag",
         "detach",
@@ -219,11 +251,6 @@ def execute_task(task: Mapping[str, Any]) -> CommandResult:
     _reject_unknown_fields(task, allowed, command)
 
     container_value = _optional_string(task, "container")
-    no_container = task.get("no_container", False)
-    if not isinstance(no_container, bool):
-        raise ValueError("task field 'no_container' must be a boolean")
-    if bool(container_value) == no_container:
-        raise ValueError("task must select exactly one of 'container' or 'no_container'")
 
     exec_command = _require_string(task, "exec")
     tag_value = _optional_string(task, "tag")
@@ -302,7 +329,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.command == "test":
         return run_test_directory(TEST_DIR, execute_task)
     if arguments.command == "version":
-        print(version_text())
+        print(styled_version_text())
         return 0
     if arguments.command == "doc":
         try:

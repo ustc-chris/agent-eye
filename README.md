@@ -31,16 +31,15 @@ man eye
 
 ```bash
 eye ensure \
-  --no-container \
   --tag my-unique-task \
   --detach \
   --log /tmp/my-unique-task.log \
   --exec "python3 /absolute/path/to/task.py"
 ```
 
-把 `--no-container` 换成 `--container CONTAINER_NAME` 即可在容器内执行；此时
-`--exec` 中的路径和 `--log` 路径都是容器内路径。不要在 `--exec` 中再写 `nohup`
-或 `&`，后台化统一交给 `--detach`。
+不写容器选项时默认在宿主机执行；增加 `--container CONTAINER_NAME` 即可在容器内
+执行，此时 `--exec` 中的路径和 `--log` 路径都是容器内路径。不要在 `--exec` 中
+添加 `nohup` 或 `&`，后台化统一交给 `--detach`。
 
 读取命令最终输出的状态行即可决定下一步（阻塞任务自身的 stdout 可能出现在状态行之前）：
 
@@ -104,8 +103,8 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ```text
 eye [--allow WINDOW] npu_status
-eye [--allow WINDOW] run    (--container NAME | --no-container) --exec COMMAND [OPTIONS]
-eye [--allow WINDOW] ensure (--container NAME | --no-container) --tag TAG --exec COMMAND [OPTIONS]
+eye [--allow WINDOW] run    [--container NAME] --exec COMMAND [OPTIONS]
+eye [--allow WINDOW] ensure [--container NAME] --tag TAG --exec COMMAND [OPTIONS]
 eye [--allow WINDOW] kill [--container NAME] --tag TAG
 eye [--allow WINDOW] from_file FILE
 eye test
@@ -115,6 +114,8 @@ eye help [COMMAND]
 ```
 
 同时支持 `eye --version`、`eye --help` 和各子命令的 `--help`。
+help 和 version 在交互终端中使用配色；重定向输出、cron、非 TTY 环境或设置
+`NO_COLOR=1` 时自动输出无 ANSI 控制符的纯文本。
 
 ## 允许时间
 
@@ -129,7 +130,6 @@ eye --allow "mon:1500-2100,2200-2359;tue:0000-2359" npu_status
 
 ```bash
 eye run \
-  --no-container \
   --exec "python3 task.py" \
   --allow "2100-2359,0000-0600"
 ```
@@ -192,7 +192,7 @@ npu-smi info
 在宿主机运行：
 
 ```bash
-eye run --no-container --exec "echo hello world"
+eye run --exec "echo hello world"
 ```
 
 在容器中运行：
@@ -206,7 +206,6 @@ eye run --container worker-0 --exec "python3 /workspace/task.py"
 
 ```bash
 eye run \
-  --no-container \
   --detach \
   --exec "sleep 10; echo finished" \
   --log /tmp/task.log
@@ -215,7 +214,7 @@ eye run \
 `run` 可以使用可选 tag，但不会因为同名 tag 已存在而跳过：
 
 ```bash
-eye run --no-container --tag task-01 --exec "sleep 10"
+eye run --tag task-01 --exec "sleep 10"
 ```
 
 ## ensure
@@ -237,7 +236,7 @@ eye ensure \
 cron 在同一瞬间触发时，只有一个会继续检查和启动，其余输出
 `SKIPPED reason=ensure_in_progress`；阻塞任务运行期间也会持有该锁。
 
-容器模式通过容器内的 `pgrep -f` 查询 tag。no-container 模式使用
+容器模式通过容器内的 `pgrep -f` 查询 tag。本地模式使用
 `/tmp/.agent_eye/pids/` 中权限为 `0600` 的 PID 状态文件，并检查进程是否存活；
 Linux 上还会通过 `/proc/<pid>/cmdline` 防止 PID 重用造成误判。
 
@@ -304,7 +303,7 @@ PID 0 和 PID 1 也始终受到保护。安全审查还会再次确认根进程�
 | detach 且有 `--log` | 后台任务直接追加 stdout 和 stderr |
 | detach 且无 `--log` | 自动写入 `/tmp/.agent_eye/<hash>.log` |
 
-容器模式中的日志路径属于容器；no-container 模式中的路径属于宿主机。工具会创建
+容器模式中的日志路径属于容器；本地模式中的路径属于宿主机。工具会创建
 日志的父目录，日志采用追加方式，不会清空已有内容。
 
 每次执行还会输出便于 agent 判断的状态行，例如：
@@ -326,7 +325,6 @@ FAILED mode=local exit=1
 ```json
 {
   "command": "ensure",
-  "no_container": true,
   "tag": "training-01",
   "exec": "python3 /workspace/train.py",
   "detach": true,
@@ -340,8 +338,9 @@ FAILED mode=local exit=1
 eye from_file /absolute/path/to/task.json
 ```
 
-`command` 支持 `npu_status`、`run`、`ensure` 和 `kill`。run/ensure 任务必须通过 `container` 或
-`no_container: true` 选择且只选择一种执行目标。`detach` 和 `log` 均为可选字段。
+`command` 支持 `npu_status`、`run`、`ensure` 和 `kill`。run/ensure 任务省略 `container`
+时默认在宿主机运行，提供 `container` 时进入对应容器。`detach` 和 `log` 均为
+可选字段。
 
 本地 kill 文件省略 `container`：
 
@@ -374,7 +373,7 @@ eye test
 JSON 任务会：
 
 1. 查询 NPU 状态；没有 `npu-smi` 时显示为跳过。
-2. no-container 运行 `echo hello world`。
+2. 在宿主机运行 `echo hello world`。
 3. 使用隔离 tag detach 启动 `sleep 5`。
 4. 再次 ensure 相同 tag，预期显示为跳过。
 
@@ -427,5 +426,5 @@ AGENT_EYE_HOME=/opt/agent_eye
 ## 安全边界
 
 `--exec` 和任务 JSON 可以在宿主机或容器中执行完整 Shell 命令，因此只能使用可信
-输入。no-container 命令拥有启动 `eye` 的用户权限。命令默认继承当前环境变量；
+输入。本地命令拥有启动 `eye` 的用户权限。命令默认继承当前环境变量；
 cron 的 PATH 通常较少，需要在 crontab 或命令中显式配置。

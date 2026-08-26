@@ -1,4 +1,4 @@
-.TH EYE 1 "August 2026" "Agent Eye" "User Commands"
+.TH EYE 1 "August 2026" "Agent Eye 1.0.0" "User Commands"
 .SH NAME
 eye \- run, deduplicate, observe, and safely stop host or Docker tasks
 .SH SYNOPSIS
@@ -7,10 +7,10 @@ eye \- run, deduplicate, observe, and safely stop host or Docker tasks
 .B eye npu_status
 .br
 .B eye run
-(--container NAME | --no-container) --exec COMMAND [--tag TAG] [--detach] [--log FILE]
+[--container NAME] --exec COMMAND [--tag TAG] [--detach] [--log FILE]
 .br
 .B eye ensure
-(--container NAME | --no-container) --tag TAG --exec COMMAND [--detach] [--log FILE]
+[--container NAME] --tag TAG --exec COMMAND [--detach] [--log FILE]
 .br
 .B eye kill
 [--container NAME] --tag TAG
@@ -35,15 +35,13 @@ when a stable tag must not be started twice. Prefer the following pattern for a
 long-running host task:
 .PP
 .nf
-eye ensure --no-container \\
+eye ensure \\
   --tag my-unique-task --detach \\
   --log /tmp/my-unique-task.log \\
   --exec "python3 /absolute/path/to/task.py"
 .fi
 .PP
-Replace
-.B --no-container
-with
+Omitting the container option executes on the host. Add
 .B --container NAME
 to execute in Docker. In container mode, command and log paths refer to the
 container. Do not put nohup or & in --exec; use --detach.
@@ -107,7 +105,6 @@ A detached local ensure task can be written as:
 .nf
 {
   "command": "ensure",
-  "no_container": true,
   "tag": "training-01",
   "exec": "python3 /workspace/train.py",
   "detach": true,

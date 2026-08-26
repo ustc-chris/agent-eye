@@ -1,6 +1,5 @@
 {
   "command": "ensure",
-  "no_container": true,
   "tag": "agent-eye-selftest-sleep-5",
   "exec": "sleep 5",
   "detach": true,
