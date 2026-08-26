@@ -1,0 +1,134 @@
+.TH EYE 1 "August 2026" "Agent Eye" "User Commands"
+.SH NAME
+eye \- run, deduplicate, observe, and safely stop host or Docker tasks
+.SH SYNOPSIS
+.B eye doc
+.br
+.B eye npu_status
+.br
+.B eye run
+(--container NAME | --no-container) --exec COMMAND [--tag TAG] [--detach] [--log FILE]
+.br
+.B eye ensure
+(--container NAME | --no-container) --tag TAG --exec COMMAND [--detach] [--log FILE]
+.br
+.B eye kill
+[--container NAME] --tag TAG
+.br
+.B eye from_file
+FILE
+.SH DESCRIPTION
+Agent Eye is a zero-third-party-dependency Python command-line tool for querying NPU
+state and managing commands on the host or in Docker containers.
+.PP
+For the canonical, detailed guide run
+.BR "eye doc" .
+The guide is read directly from the installed source tree, so it includes complete
+examples, JSON schemas, scheduling rules, output semantics, safety boundaries, and
+troubleshooting notes.
+.SH QUICK START FOR AGENTS
+Use
+.B run
+for one unconditional execution. Use
+.B ensure
+when a stable tag must not be started twice. Prefer the following pattern for a
+long-running host task:
+.PP
+.nf
+eye ensure --no-container \\
+  --tag my-unique-task --detach \\
+  --log /tmp/my-unique-task.log \\
+  --exec "python3 /absolute/path/to/task.py"
+.fi
+.PP
+Replace
+.B --no-container
+with
+.B --container NAME
+to execute in Docker. In container mode, command and log paths refer to the
+container. Do not put nohup or & in --exec; use --detach.
+.SH COMMAND SELECTION
+.TP
+.B npu_status
+Run the configured NPU query (currently npu-smi info).
+.TP
+.B run
+Always execute one command. It blocks by default and returns the real command status.
+.TP
+.B ensure
+Check a literal tag and execute only when no matching task exists. Concurrent calls
+are protected by a non-blocking host lock.
+.TP
+.B kill
+Safely stop the one task matching a tag. It fails closed on ambiguous matches,
+unreadable process state, UID mismatch, or protected processes.
+.TP
+.B from_file
+Execute one JSON task description.
+.TP
+.B doc
+Print the complete Markdown user and agent guide to standard output.
+.TP
+.B test
+Run repository JSON scenarios and Python tests.
+.SH STATUS CONTRACT
+.TP
+.B SUCCEEDED
+A blocking command completed successfully.
+.TP
+.B FAILED
+Startup, inspection, or command execution failed. Read stderr and the task log.
+.TP
+.B STARTED
+A detached command was submitted. This does not mean the task ultimately succeeded;
+inspect its log later.
+.TP
+.B SKIPPED
+No action was needed or allowed. A skipped ensure with mode, tag, and PID means the
+tagged task already exists. Explicit reasons include ensure_in_progress,
+tag_not_found, and outside_allow.
+.TP
+.B KILLED
+The unique matching process tree passed safety review and received SIGTERM.
+.SH TIME WINDOWS
+The global
+.B --allow WINDOW
+gate is checked before external queries or execution. Example:
+.PP
+.nf
+eye --allow "workday:0900-1200,1300-1800" npu_status
+.fi
+.PP
+Use four-digit local HHMM times. Ranges include both endpoints. Split ranges that
+cross midnight, for example 2200-2359,0000-0600.
+.SH FILE TASKS
+A detached local ensure task can be written as:
+.PP
+.nf
+{
+  "command": "ensure",
+  "no_container": true,
+  "tag": "training-01",
+  "exec": "python3 /workspace/train.py",
+  "detach": true,
+  "log": "/tmp/training-01.log"
+}
+.fi
+.PP
+Run it with
+.BR "eye from_file /absolute/path/to/task.json" .
+.SH SAFETY
+The --exec value is a complete shell command and must be trusted. Host commands run
+with the invoking user's privileges. Use stable, unique, literal tags. STARTED only
+confirms submission. Local safe kill needs readable Linux /proc and is unavailable
+on default macOS. Container kill requires readable /proc inside the container.
+.SH DOCUMENTATION
+Run
+.B eye doc
+for the full guide. Run
+.B eye help COMMAND
+for concise argument help.
+.SH SEE ALSO
+.BR docker (1),
+.BR crontab (5),
+.BR pgrep (1)

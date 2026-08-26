@@ -30,6 +30,7 @@ class CliTests(unittest.TestCase):
                 "from_file",
                 "test",
                 "version",
+                "doc",
                 "help",
             },
         )
@@ -62,6 +63,17 @@ class CliTests(unittest.TestCase):
             cli.main(["--help"])
         self.assertEqual(raised.exception.code, 0)
         self.assertIn("npu_status", output.getvalue())
+
+    def test_doc_returns_detailed_agent_guide(self) -> None:
+        output = StringIO()
+        with redirect_stdout(output):
+            status = cli.main(["doc"])
+        self.assertEqual(status, 0)
+        rendered = output.getvalue()
+        self.assertIn("# Agent Eye", rendered)
+        self.assertIn("## 给新 Agent 的快速入口", rendered)
+        self.assertIn("eye ensure", rendered)
+        self.assertIn("SUCCEEDED", rendered)
 
     @patch("agent_eye.cli.npu_status.run", return_value=0)
     def test_npu_status_command_routes_to_config(self, mocked_status) -> None:

@@ -6,6 +6,57 @@ Agent Eye 是一个零第三方 Python 依赖的轻量命令行工具。它通�
 目标机器需要 Python 3。容器模式还需要 Docker CLI，以及容器内的 Bash、`pgrep`、
 `tee` 和 `awk`；安全 kill 还需要可读取的 `/proc`。
 
+## 给新 Agent 的快速入口
+
+先运行下面任一命令读取完整说明。源码目录内一定可以使用 `eye doc`；执行过
+`./install.sh` 后，也可以使用系统风格的 `man eye`：
+
+```bash
+eye doc
+man eye
+```
+
+根据任务目的选择命令：
+
+| 目的 | 应使用的命令 |
+|---|---|
+| 查看 NPU | `eye npu_status` |
+| 无条件执行一次 | `eye run` |
+| 同一任务不存在时才启动 | `eye ensure` |
+| 安全终止唯一 tag 对应的任务 | `eye kill` |
+| 执行 JSON 中描述的任务 | `eye from_file` |
+
+推荐 agent 对长任务使用 `ensure + --tag + --detach + --log`。这能避免重复启动，
+立即返回，并留下可持续检查的日志：
+
+```bash
+eye ensure \
+  --no-container \
+  --tag my-unique-task \
+  --detach \
+  --log /tmp/my-unique-task.log \
+  --exec "python3 /absolute/path/to/task.py"
+```
+
+把 `--no-container` 换成 `--container CONTAINER_NAME` 即可在容器内执行；此时
+`--exec` 中的路径和 `--log` 路径都是容器内路径。不要在 `--exec` 中再写 `nohup`
+或 `&`，后台化统一交给 `--detach`。
+
+读取命令最终输出的状态行即可决定下一步（阻塞任务自身的 stdout 可能出现在状态行之前）：
+
+| 状态 | 含义 | Agent 下一步 |
+|---|---|---|
+| `SUCCEEDED` | 阻塞任务已成功完成 | 使用结果继续工作 |
+| `FAILED` | 启动、检查或任务执行失败 | 读取错误和日志，停止假设任务成功 |
+| `STARTED` | detach 任务已成功提交 | 记录 log，稍后检查任务最终输出 |
+| `SKIPPED mode=... tag=... pid=...` | 同 tag 任务已运行 | 不要重复启动，检查现有任务日志 |
+| `SKIPPED reason=outside_allow` | 当前不在允许时段 | 保留任务，等待允许时段再调用 |
+| `KILLED` | 目标任务已通过安全审查并终止 | 按需确认日志或重新启动 |
+
+最重要的边界：`STARTED` 不代表任务最终成功；`--exec` 会执行完整 Shell 命令，只能
+传入可信内容；tag 应为每个逻辑任务稳定且唯一的字面量；不确定是否已有任务时优先
+用 `ensure`，不要先 `kill` 再 `run`。
+
 ## 直接使用和安装
 
 在源码目录中可以直接运行：
@@ -21,19 +72,26 @@ Agent Eye 是一个零第三方 Python 依赖的轻量命令行工具。它通�
 ./install.sh
 ```
 
-安装脚本不会复制源码，只会创建：
+安装脚本不会复制源码，只会创建命令和 man page 的符号链接：
 
 ```text
 $HOME/.local/bin/eye -> $AGENT_EYE_HOME/eye
+$HOME/.local/share/man/man1/eye.1 -> $AGENT_EYE_HOME/docs/eye.1
 ```
 
-可以显式指定源码和命令链接目录：
+可以显式指定源码、命令链接目录和 man page 链接目录：
 
 ```bash
 AGENT_EYE_HOME=/opt/agent_eye \
 AGENT_EYE_BIN_DIR=/opt/bin \
+AGENT_EYE_MAN_DIR=/opt/share/man/man1 \
 ./install.sh
 ```
+
+自定义 `AGENT_EYE_MAN_DIR` 时，它的上级 man 根目录必须位于 `MANPATH`，例如上例
+还需设置 `export MANPATH="/opt/share/man:${MANPATH:-}"`。默认目录会被常见 Linux 和
+macOS 的 `man` 自动发现；如本机未发现，可设置
+`export MANPATH="$HOME/.local/share/man:${MANPATH:-}"`。
 
 SSH 或 cron 中建议显式设置：
 
@@ -52,6 +110,7 @@ eye [--allow WINDOW] kill [--container NAME] --tag TAG
 eye [--allow WINDOW] from_file FILE
 eye test
 eye version
+eye doc
 eye help [COMMAND]
 ```
 
@@ -113,7 +172,7 @@ eye run \
 SKIPPED reason=outside_allow now=mon:1430 timezone=CST allow="mon:1500-2100"
 ```
 
-表达式错误返回 2。`test`、`help` 和 `version` 不受允许时间限制，即使全局传入
+表达式错误返回 2。`test`、`doc`、`help` 和 `version` 不受允许时间限制，即使全局传入
 `--allow` 也不会检查它。
 
 ## NPU 状态

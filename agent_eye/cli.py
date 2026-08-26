@@ -25,6 +25,15 @@ def version_text() -> str:
     )
 
 
+def documentation_text() -> str:
+    """Return the canonical, repository-local user guide."""
+    documentation = REPOSITORY_DIR / "README.md"
+    try:
+        return documentation.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"cannot read documentation: {documentation}: {exc}") from exc
+
+
 class _VersionAction(argparse.Action):
     def __init__(self, option_strings: Sequence[str], dest: str, **kwargs: Any) -> None:
         super().__init__(option_strings, dest, nargs=0, **kwargs)
@@ -85,6 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("test", help="运行完整功能测试和 test 目录内的 JSON 任务")
     subparsers.add_parser("version", help="显示版本和仓库目录")
+    subparsers.add_parser("doc", help="显示完整使用说明，适合 agent 直接阅读")
 
     help_parser = subparsers.add_parser("help", help="显示总帮助或子命令帮助")
     help_parser.add_argument("topic", nargs="?", help="可选的子命令名称")
@@ -293,6 +303,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_test_directory(TEST_DIR, execute_task)
     if arguments.command == "version":
         print(version_text())
+        return 0
+    if arguments.command == "doc":
+        try:
+            print(documentation_text(), end="")
+        except RuntimeError as exc:
+            print(f"eye: {exc}", file=sys.stderr)
+            return 1
         return 0
     if arguments.command == "help":
         return _show_help(parser, arguments.topic)
