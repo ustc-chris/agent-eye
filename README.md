@@ -201,6 +201,39 @@ NPU_ID,STATUS,PROCESS_TYPE,OWNER_ID
 父链循环、超过安全深度或全链未匹配时，OWNER_ID 输出 `null`。同卡多个进程解析出
 不同 OWNER_ID 时也输出 `null`，避免错误归属。
 
+## 多机 NPU 终端大屏
+
+仓库根目录的 `npu_dashboard.py` 可以通过 SSH 并行调用多台服务器上的
+`eye npu_status`，并持续刷新终端大屏。先编辑脚本顶部配置区：
+
+```python
+QUERY_REFRESH_SECONDS = 20.0
+TERMINAL_REFRESH_SECONDS = 0.5
+DISPLAY_COLUMNS = 1
+MACHINES = [
+    {"name": "server-01", "ip": "root@192.168.1.10", "alias": "推理节点 A"},
+    {"name": "server-02", "ip": "root@192.168.1.11", "alias": "推理节点 B"},
+]
+```
+
+然后运行：
+
+```bash
+python3 npu_dashboard.py
+```
+
+`ip` 支持 IP、主机名或 `user@host`。运行前需要保证本机可以通过 SSH 密钥无交互
+登录目标服务器，目标服务器的 PATH 中可以找到 `eye`，并且 known_hosts 已配置。
+查询按机器并行执行；单台机器超时或失败只会在对应卡片内显示错误。大屏每 0.5 秒
+更新倒计时，每 20 秒重新查询，并在终端宽度变化时自动调整实际列数。
+
+每台机器的 header 显示 `name (alias)     free: 可用卡数/总卡数`。表格边框和 header
+按可用卡数量着色：0 张为红色、1～3 张为黄色、4 张及以上为绿色；NPU 数据内容单独
+着色，空闲卡为蓝色、占用卡为红色。所有横向边框均使用 `#`。
+
+`DISPLAY_COLUMNS` 是期望的最大列数，默认 `1`；终端放不下时会自动减少。按
+`Ctrl-C` 退出，大屏会恢复终端光标。设置 `NO_COLOR=1` 可以关闭颜色。
+
 ## run
 
 在宿主机运行：
