@@ -52,14 +52,18 @@ Run npu-smi info and print one four-column row per device:
 .PP
 .nf
 0,FREE,null,null
-1,PROCESSING,VLLM,z50064016
-2,PROCESSING,VLLM,null
+1,PROCESSING,VLLMWorker,z50064016
+2,PROCESSING,msmodelslim,null
 .fi
 .PP
 The columns are NPU ID, status, process type, and owner ID. For every process PID,
+eye first checks its working directory with pwdx. If that does not identify an owner,
 eye follows the full ps parent chain to ppid=0 and searches each command for a path
 component matching one letter plus eight digits, such as /z50064016/. Missing,
 vanished, cyclic, or conflicting ownership is reported as null.
+.PP
+Process names are preserved exactly as reported by npu-smi (apart from output-safe
+whitespace and comma normalization); no VLLM-specific mapping is applied.
 .TP
 .B run
 Always execute one command. It blocks by default and returns the real command status.

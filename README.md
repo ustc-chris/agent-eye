@@ -187,19 +187,21 @@ CSV 风格状态：
 ```text
 NPU_ID,STATUS,PROCESS_TYPE,OWNER_ID
 0,FREE,null,null
-1,PROCESSING,VLLM,z50064016
-2,PROCESSING,VLLM,null
+1,PROCESSING,VLLMWorker,z50064016
+2,PROCESSING,msmodelslim,null
 ```
 
 实际输出不包含标题行。`FREE` 表示该卡没有进程，后两列固定为 `null`；
-`PROCESSING` 表示至少有一个进程。进程名包含 `VLLM`（大小写不敏感）时，类型统一
-输出为 `VLLM`；无法识别时输出 `UNKNOWN`，同卡存在多种类型时输出 `MIXED`。
+`PROCESSING` 表示至少有一个进程。PROCESS_TYPE 保留 `npu-smi` 返回的真实进程名，
+例如 `VLLMWorker`、`VLLMWorker_TP` 或 `msmodelslim`，不做类型映射。只有进程名为空
+时才输出 `UNKNOWN`，同卡存在多种进程名称时输出 `MIXED`。
 
-对于每个 NPU 进程，工具从 `npu-smi` 给出的宿主机 PID 开始，使用 `ps` 获取完整
-`ppid` 和 `command`，沿父进程链向上查询到 `ppid=0`。每一级命令行都会匹配
-`/([A-Za-z]\d{8})/`：例如 `/z50064016/` 记录为 `z50064016`。进程已退出、查询失败、
-父链循环、超过安全深度或全链未匹配时，OWNER_ID 输出 `null`。同卡多个进程解析出
-不同 OWNER_ID 时也输出 `null`，避免错误归属。
+对于每个 NPU 进程，工具先对 `npu-smi` 给出的宿主机 PID 执行 `pwdx`，尝试从进程
+工作目录识别 OWNER_ID。只有 `pwdx` 不可用、查询失败或工作目录未匹配时，才使用
+`ps` 获取完整 `ppid` 和 `command`，沿父进程链向上查询到 `ppid=0`。工作目录和每
+一级命令行都匹配 `/([A-Za-z]\d{8})/`：例如 `/z50064016/` 记录为 `z50064016`。
+进程已退出、查询失败、父链循环、超过安全深度或两种方式均未匹配时，OWNER_ID 输出
+`null`。同卡多个进程解析出不同 OWNER_ID 时也输出 `null`，避免错误归属。
 
 ## 多机 NPU 终端大屏
 

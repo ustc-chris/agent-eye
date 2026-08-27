@@ -16,6 +16,7 @@ _PROCESS_ROW = re.compile(
     rf"\s*(\d+)\s*{_TABLE_BORDER}\s*([^|]+?)\s*{_TABLE_BORDER}"
 )
 _PS_ROW = re.compile(r"^\s*(\d+)\s+(.*?)\s*$")
+_PWDX_ROW = re.compile(r"^\s*(\d+):\s*(.*?)\s*$")
 _OWNER_ID = re.compile(r"/([A-Za-z]\d{8})/")
 _MAX_PARENT_DEPTH = 256
 
@@ -100,8 +101,32 @@ def _query_process(pid: int) -> tuple[int, str] | None:
     return int(match.group(1)), match.group(2)
 
 
+def _query_working_directory(pid: int) -> str | None:
+    try:
+        completed = subprocess.run(
+            ["pwdx", str(pid)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except (FileNotFoundError, OSError):
+        return None
+    if completed.returncode != 0:
+        return None
+    match = _PWDX_ROW.match(completed.stdout)
+    if not match or int(match.group(1)) != pid:
+        return None
+    return match.group(2)
+
+
 def find_owner_id(pid: int) -> str | None:
-    """Walk a PID's parent chain and return the first path-scoped owner ID."""
+    """Try the PID's cwd, then walk parents for the first path-scoped owner ID."""
+    working_directory = _query_working_directory(pid)
+    if working_directory is not None:
+        owner = _OWNER_ID.search(working_directory)
+        if owner:
+            return owner.group(1)
+
     current = pid
     visited: set[int] = set()
 
@@ -123,10 +148,9 @@ def find_owner_id(pid: int) -> str | None:
     return None
 
 
-def _classify_process(name: str) -> str:
-    if re.search(r"vllm", name, re.IGNORECASE):
-        return "VLLM"
-    return "UNKNOWN"
+def _normalize_process_name(name: str) -> str:
+    normalized = re.sub(r"\s+", "_", name.strip()).replace(",", "_")
+    return normalized or "UNKNOWN"
 
 
 def build_statuses(devices: list[NpuInfo]) -> list[NpuStatus]:
@@ -136,7 +160,7 @@ def build_statuses(devices: list[NpuInfo]) -> list[NpuStatus]:
             statuses.append(NpuStatus(device.npu_id, "FREE", None, None))
             continue
 
-        process_types = {_classify_process(item.name) for item in device.processes}
+        process_types = {_normalize_process_name(item.name) for item in device.processes}
         process_type = next(iter(process_types)) if len(process_types) == 1 else "MIXED"
         owner_ids = {
             owner

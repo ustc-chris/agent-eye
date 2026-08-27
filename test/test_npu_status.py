@@ -41,8 +41,26 @@ class NpuStatusTests(unittest.TestCase):
             (npu_status.NpuProcess(123, "VLLMWorker_TP"),),
         )
 
+    @patch("agent_eye.config.npu_status.find_owner_id", return_value=None)
+    def test_non_vllm_process_keeps_its_real_name(self, _mocked_owner) -> None:
+        statuses = npu_status.build_statuses(
+            [
+                npu_status.NpuInfo(
+                    7,
+                    (npu_status.NpuProcess(3537849, "msmodelslim"),),
+                )
+            ]
+        )
+        self.assertEqual(
+            statuses[0].format(),
+            "7,PROCESSING,msmodelslim,null",
+        )
+
+    @patch("agent_eye.config.npu_status._query_working_directory", return_value=None)
     @patch("agent_eye.config.npu_status.subprocess.run")
-    def test_run_formats_free_owned_and_unowned_npus(self, mocked_run) -> None:
+    def test_run_formats_free_owned_and_unowned_npus(
+        self, mocked_run, _mocked_pwdx
+    ) -> None:
         responses = {
             1648703: (0, "100 /usr/bin/python worker.py\n"),
             100: (0, "1 bash /srv/z50064016/start.sh\n"),
@@ -66,14 +84,17 @@ class NpuStatusTests(unittest.TestCase):
         self.assertEqual(
             output.getvalue().splitlines(),
             [
-                "0,PROCESSING,VLLM,z50064016",
-                "1,PROCESSING,VLLM,null",
+                "0,PROCESSING,VLLMWorker,z50064016",
+                "1,PROCESSING,VLLMWorker_TP,null",
                 "2,FREE,null,null",
             ],
         )
 
     @patch("agent_eye.config.npu_status._query_process")
-    def test_owner_pattern_requires_exact_slash_boundaries(self, mocked_query) -> None:
+    @patch("agent_eye.config.npu_status._query_working_directory", return_value=None)
+    def test_owner_pattern_requires_exact_slash_boundaries(
+        self, _mocked_pwdx, mocked_query
+    ) -> None:
         mocked_query.side_effect = [
             (20, "python /srv/zz50064016/job.py"),
             (30, "bash /srv/z5006401/job.sh"),
@@ -82,10 +103,36 @@ class NpuStatusTests(unittest.TestCase):
         self.assertEqual(npu_status.find_owner_id(10), "z12345678")
 
     @patch("agent_eye.config.npu_status._query_process")
-    def test_parent_cycle_returns_null(self, mocked_query) -> None:
+    @patch("agent_eye.config.npu_status._query_working_directory", return_value=None)
+    def test_parent_cycle_returns_null(self, _mocked_pwdx, mocked_query) -> None:
         mocked_query.side_effect = [(20, "worker"), (10, "launcher")]
         self.assertIsNone(npu_status.find_owner_id(10))
         self.assertEqual(mocked_query.call_count, 2)
+
+    @patch("agent_eye.config.npu_status._query_process")
+    @patch(
+        "agent_eye.config.npu_status._query_working_directory",
+        return_value="/data/z50064016/project",
+    )
+    def test_pwdx_owner_wins_without_parent_query(
+        self, _mocked_pwdx, mocked_process
+    ) -> None:
+        self.assertEqual(npu_status.find_owner_id(123), "z50064016")
+        mocked_process.assert_not_called()
+
+    @patch("agent_eye.config.npu_status.subprocess.run")
+    def test_pwdx_output_is_validated(self, mocked_run) -> None:
+        mocked_run.return_value = subprocess.CompletedProcess(
+            [], 0, "123: /data/z50064016/project\n", ""
+        )
+        self.assertEqual(
+            npu_status._query_working_directory(123),
+            "/data/z50064016/project",
+        )
+        mocked_run.return_value = subprocess.CompletedProcess(
+            [], 0, "999: /data/z99999999/project\n", ""
+        )
+        self.assertIsNone(npu_status._query_working_directory(123))
 
     @patch("agent_eye.config.npu_status.subprocess.run")
     def test_unparseable_success_is_an_error(self, mocked_run) -> None:
