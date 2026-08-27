@@ -48,7 +48,18 @@ container. Do not put nohup or & in --exec; use --detach.
 .SH COMMAND SELECTION
 .TP
 .B npu_status
-Run the configured NPU query (currently npu-smi info).
+Run npu-smi info and print one four-column row per device:
+.PP
+.nf
+0,FREE,null,null
+1,PROCESSING,VLLM,z50064016
+2,PROCESSING,VLLM,null
+.fi
+.PP
+The columns are NPU ID, status, process type, and owner ID. For every process PID,
+eye follows the full ps parent chain to ppid=0 and searches each command for a path
+component matching one letter plus eight digits, such as /z50064016/. Missing,
+vanished, cyclic, or conflicting ownership is reported as null.
 .TP
 .B run
 Always execute one command. It blocks by default and returns the real command status.

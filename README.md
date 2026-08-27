@@ -181,11 +181,25 @@ SKIPPED reason=outside_allow now=mon:1430 timezone=CST allow="mon:1500-2100"
 eye npu_status
 ```
 
-该命令调用 `agent_eye/config/npu_status.py`，当前执行：
+该命令执行 `npu-smi info`，解析设备表和进程表，并为每张 NPU 输出一行固定四列的
+CSV 风格状态：
 
-```bash
-npu-smi info
+```text
+NPU_ID,STATUS,PROCESS_TYPE,OWNER_ID
+0,FREE,null,null
+1,PROCESSING,VLLM,z50064016
+2,PROCESSING,VLLM,null
 ```
+
+实际输出不包含标题行。`FREE` 表示该卡没有进程，后两列固定为 `null`；
+`PROCESSING` 表示至少有一个进程。进程名包含 `VLLM`（大小写不敏感）时，类型统一
+输出为 `VLLM`；无法识别时输出 `UNKNOWN`，同卡存在多种类型时输出 `MIXED`。
+
+对于每个 NPU 进程，工具从 `npu-smi` 给出的宿主机 PID 开始，使用 `ps` 获取完整
+`ppid` 和 `command`，沿父进程链向上查询到 `ppid=0`。每一级命令行都会匹配
+`/([A-Za-z]\d{8})/`：例如 `/z50064016/` 记录为 `z50064016`。进程已退出、查询失败、
+父链循环、超过安全深度或全链未匹配时，OWNER_ID 输出 `null`。同卡多个进程解析出
+不同 OWNER_ID 时也输出 `null`，避免错误归属。
 
 ## run
 
