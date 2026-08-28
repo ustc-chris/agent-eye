@@ -103,6 +103,47 @@ class NpuStatusTests(unittest.TestCase):
         self.assertEqual(npu_status.find_owner_id(10), "z12345678")
 
     @patch("agent_eye.config.npu_status._query_process")
+    @patch(
+        "agent_eye.config.npu_status._query_working_directory",
+        return_value="/home/z50064016",
+    )
+    def test_owner_at_working_directory_end_is_accepted(
+        self, _mocked_pwdx, mocked_process
+    ) -> None:
+        self.assertEqual(npu_status.find_owner_id(123), "z50064016")
+        mocked_process.assert_not_called()
+
+    @patch("agent_eye.config.npu_status._query_process")
+    @patch("agent_eye.config.npu_status._query_working_directory", return_value=None)
+    def test_owner_at_command_end_is_accepted(
+        self, _mocked_pwdx, mocked_query
+    ) -> None:
+        mocked_query.return_value = (0, "python --workspace /home/z50064016")
+        self.assertEqual(npu_status.find_owner_id(123), "z50064016")
+
+    @patch("agent_eye.config.npu_status._query_process")
+    @patch(
+        "agent_eye.config.npu_status._query_working_directory",
+        return_value="/home/root/z1242837164512934712594",
+    )
+    def test_long_identifier_at_end_is_not_partially_matched(
+        self, _mocked_pwdx, mocked_query
+    ) -> None:
+        mocked_query.return_value = (0, "/home/root/z1242837164512934712594")
+        self.assertIsNone(npu_status.find_owner_id(123))
+
+    def test_complete_component_takes_priority_over_end_match(self) -> None:
+        self.assertEqual(
+            npu_status._extract_owner_id(
+                "/home/a12345678/project --fallback /home/b87654321"
+            ),
+            "a12345678",
+        )
+
+    def test_owner_prefix_must_be_lowercase(self) -> None:
+        self.assertIsNone(npu_status._extract_owner_id("/home/Z50064016"))
+
+    @patch("agent_eye.config.npu_status._query_process")
     @patch("agent_eye.config.npu_status._query_working_directory", return_value=None)
     def test_parent_cycle_returns_null(self, _mocked_pwdx, mocked_query) -> None:
         mocked_query.side_effect = [(20, "worker"), (10, "launcher")]

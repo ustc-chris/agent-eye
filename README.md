@@ -78,6 +78,10 @@ $HOME/.local/bin/eye -> $AGENT_EYE_HOME/eye
 $HOME/.local/share/man/man1/eye.1 -> $AGENT_EYE_HOME/docs/eye.1
 ```
 
+重新安装时，如果现有 `eye` 或 `eye.1` 是失效符号链接，脚本会直接清理并替换。
+如果链接仍然有效且指向另一个可识别的 Agent Eye 源码树，也会自动更新为
+当前源码。普通文件、目录和指向其他项目的有效符号链接仍会被拒绝，避免覆盖无关内容。
+
 可以显式指定源码、命令链接目录和 man page 链接目录：
 
 ```bash
@@ -199,7 +203,9 @@ NPU_ID,STATUS,PROCESS_TYPE,OWNER_ID
 对于每个 NPU 进程，工具先对 `npu-smi` 给出的宿主机 PID 执行 `pwdx`，尝试从进程
 工作目录识别 OWNER_ID。只有 `pwdx` 不可用、查询失败或工作目录未匹配时，才使用
 `ps` 获取完整 `ppid` 和 `command`，沿父进程链向上查询到 `ppid=0`。工作目录和每
-一级命令行都匹配 `/([A-Za-z]\d{8})/`：例如 `/z50064016/` 记录为 `z50064016`。
+一级命令行都优先匹配完整路径段 `/([a-z]\d{8})/`；如果没有，再允许在整个文本
+末尾匹配 `/([a-z]\d{8})$`。例如 `/z50064016/` 和以 `/z50064016` 结尾的路径
+都记录为 `z50064016`，更长的数字串不会被部分匹配。
 进程已退出、查询失败、父链循环、超过安全深度或两种方式均未匹配时，OWNER_ID 输出
 `null`。同卡多个进程解析出不同 OWNER_ID 时也输出 `null`，避免错误归属。
 
@@ -235,6 +241,23 @@ python3 npu_dashboard.py
 
 `DISPLAY_COLUMNS` 是期望的最大列数，默认 `1`；终端放不下时会自动减少。按
 `Ctrl-C` 退出，大屏会恢复终端光标。设置 `NO_COLOR=1` 可以关闭颜色。
+
+### Tkinter 图形界面
+
+图形版保留上述机器列表、NPU 状态卡片、可用数量配色、并行查询、刷新时间和
+倒计时逻辑：
+
+```bash
+python3 npu_dashboard_tkinter.py
+```
+
+右上角的“设置”可修改远端查询周期、界面刷新周期、最大分列数、机器列表、
+远端命令和 SSH 超时。设置保存在系统默认的用户缓存目录：Windows 使用
+`LOCALAPPDATA`，macOS 使用 `~/Library/Caches`，Linux 优先使用 `XDG_CACHE_HOME`，
+否则使用 `~/.cache`。未保存设置时，图形版会以 `npu_dashboard.py` 顶部配置为默认值。
+
+图形版仅使用 Python 标准库，但 Python 需带 Tk 支持。Linux 发行版如将 Tk 拆分打包，
+需先安装对应的 `python3-tk` 包。
 
 ## run
 

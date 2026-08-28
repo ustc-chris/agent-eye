@@ -78,7 +78,7 @@ class NpuRow:
         if self.status == "FREE":
             return "FREE"
         process = self.process_type or "UNKNOWN"
-        owner = f"可能是：{self.owner_id}" or "未知运行者"
+        owner = self.owner_id or "未知运行者"
         return f"{process}（{owner}）"
 
 

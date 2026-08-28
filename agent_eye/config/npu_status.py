@@ -17,7 +17,8 @@ _PROCESS_ROW = re.compile(
 )
 _PS_ROW = re.compile(r"^\s*(\d+)\s+(.*?)\s*$")
 _PWDX_ROW = re.compile(r"^\s*(\d+):\s*(.*?)\s*$")
-_OWNER_ID = re.compile(r"/([A-Za-z]\d{8})/")
+_OWNER_ID_PATH_COMPONENT = re.compile(r"/([a-z]\d{8})/")
+_OWNER_ID_PATH_END = re.compile(r"/([a-z]\d{8})$")
 _MAX_PARENT_DEPTH = 256
 
 
@@ -119,13 +120,21 @@ def _query_working_directory(pid: int) -> str | None:
     return match.group(2)
 
 
+def _extract_owner_id(text: str) -> str | None:
+    """Prefer a complete path component, then allow one at the text end."""
+    match = _OWNER_ID_PATH_COMPONENT.search(text)
+    if match is None:
+        match = _OWNER_ID_PATH_END.search(text)
+    return match.group(1) if match is not None else None
+
+
 def find_owner_id(pid: int) -> str | None:
     """Try the PID's cwd, then walk parents for the first path-scoped owner ID."""
     working_directory = _query_working_directory(pid)
     if working_directory is not None:
-        owner = _OWNER_ID.search(working_directory)
-        if owner:
-            return owner.group(1)
+        owner = _extract_owner_id(working_directory)
+        if owner is not None:
+            return owner
 
     current = pid
     visited: set[int] = set()
@@ -139,9 +148,9 @@ def find_owner_id(pid: int) -> str | None:
         if process is None:
             return None
         parent_pid, command = process
-        owner = _OWNER_ID.search(command)
-        if owner:
-            return owner.group(1)
+        owner = _extract_owner_id(command)
+        if owner is not None:
+            return owner
         if parent_pid == 0:
             return None
         current = parent_pid
