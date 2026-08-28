@@ -12,7 +12,7 @@ import sys
 import tempfile
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Mapping
@@ -30,51 +30,84 @@ except (ImportError, ModuleNotFoundError):  # Keep config helpers usable headles
 
 APP_NAME = "agent_eye"
 CONFIG_FILENAME = "npu_dashboard_tkinter.json"
+TK_POLL_MILLISECONDS = 250
+SYSTEM_THEME_POLL_SECONDS = 5.0
+THEME_MODES = ("auto", "dark", "light")
+THEME_LABELS = {"auto": "自动", "dark": "深色", "light": "浅色"}
 
-BACKGROUND = "#10151c"
-PANEL = "#18212b"
-TEXT = "#e8edf2"
-MUTED = "#8b98a5"
-CYAN = "#38bdf8"
-GREEN = "#22c55e"
-YELLOW = "#eab308"
-RED = "#ef4444"
-BLUE = "#60a5fa"
+
+@dataclass(frozen=True)
+class ThemePalette:
+    background: str
+    panel: str
+    text: str
+    muted: str
+    cyan: str
+    green: str
+    yellow: str
+    red: str
+    blue: str
+    selection: str
+
+
+DARK_PALETTE = ThemePalette(
+    background="#10151c",
+    panel="#18212b",
+    text="#e8edf2",
+    muted="#8b98a5",
+    cyan="#38bdf8",
+    green="#22c55e",
+    yellow="#eab308",
+    red="#ef4444",
+    blue="#60a5fa",
+    selection="#075985",
+)
+LIGHT_PALETTE = ThemePalette(
+    background="#f3f6f9",
+    panel="#ffffff",
+    text="#17212b",
+    muted="#64717d",
+    cyan="#0369a1",
+    green="#15803d",
+    yellow="#a16207",
+    red="#b91c1c",
+    blue="#1d4ed8",
+    selection="#bae6fd",
+)
 
 
 @dataclass(frozen=True)
 class DashboardConfig:
     query_refresh_seconds: float
-    interface_refresh_seconds: float
     display_columns: int
     machines: tuple[dashboard.Machine, ...]
     remote_eye_command: str
     ssh_timeout_seconds: float
+    always_on_top: bool
+    theme_mode: str
 
     @classmethod
     def defaults(cls) -> "DashboardConfig":
         return cls(
             query_refresh_seconds=float(dashboard.QUERY_REFRESH_SECONDS),
-            interface_refresh_seconds=float(dashboard.TERMINAL_REFRESH_SECONDS),
             display_columns=int(dashboard.DISPLAY_COLUMNS),
             machines=dashboard.load_machines(dashboard.MACHINES),
             remote_eye_command=dashboard.REMOTE_EYE_COMMAND,
             ssh_timeout_seconds=float(dashboard.SSH_TIMEOUT_SECONDS),
+            always_on_top=False,
+            theme_mode="auto",
         )
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, object]) -> "DashboardConfig":
         try:
             query_refresh = float(values["query_refresh_seconds"])
-            interface_refresh = float(values["interface_refresh_seconds"])
             columns = int(values["display_columns"])
             timeout = float(values["ssh_timeout_seconds"])
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("刷新周期、列数和超时必须是有效数字") from exc
         if not math.isfinite(query_refresh) or query_refresh <= 0:
             raise ValueError("远端查询周期必须大于 0")
-        if not math.isfinite(interface_refresh) or interface_refresh <= 0:
-            raise ValueError("界面刷新周期必须大于 0")
         if columns <= 0:
             raise ValueError("最大分列数必须大于 0")
         if not math.isfinite(timeout) or timeout <= 0:
@@ -83,23 +116,29 @@ class DashboardConfig:
         command = values.get("remote_eye_command")
         if not isinstance(command, str) or not command.strip():
             raise ValueError("远端命令不能为空")
+        always_on_top = values.get("always_on_top", False)
+        if not isinstance(always_on_top, bool):
+            raise ValueError("窗口置顶设置必须是布尔值")
+        theme_mode = values.get("theme_mode", "auto")
+        if theme_mode not in THEME_MODES:
+            raise ValueError("主题设置必须是 auto、dark 或 light")
         raw_machines = values.get("machines")
         if not isinstance(raw_machines, (list, tuple)):
             raise ValueError("机器列表必须是列表")
         machines = dashboard.load_machines(raw_machines)
         return cls(
             query_refresh,
-            interface_refresh,
             columns,
             machines,
             command.strip(),
             timeout,
+            always_on_top,
+            str(theme_mode),
         )
 
     def to_dict(self) -> dict[str, object]:
         return {
             "query_refresh_seconds": self.query_refresh_seconds,
-            "interface_refresh_seconds": self.interface_refresh_seconds,
             "display_columns": self.display_columns,
             "machines": [
                 {"name": item.name, "ip": item.ip, "alias": item.alias}
@@ -107,7 +146,67 @@ class DashboardConfig:
             ],
             "remote_eye_command": self.remote_eye_command,
             "ssh_timeout_seconds": self.ssh_timeout_seconds,
+            "always_on_top": self.always_on_top,
+            "theme_mode": self.theme_mode,
         }
+
+
+def system_prefers_dark() -> bool:
+    """Best-effort detection using each desktop's native preference source."""
+    system = platform.system()
+    if system == "Windows":
+        try:
+            import winreg
+
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+            ) as key:
+                value, _kind = winreg.QueryValueEx(key, "AppsUseLightTheme")
+            return int(value) == 0
+        except (ImportError, OSError, ValueError):
+            return False
+    if system == "Darwin":
+        try:
+            completed = subprocess.run(
+                ["defaults", "read", "-g", "AppleInterfaceStyle"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=1.0,
+            )
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            return False
+        return completed.returncode == 0 and "dark" in completed.stdout.lower()
+
+    gtk_theme = os.environ.get("GTK_THEME", "").lower()
+    if "dark" in gtk_theme:
+        return True
+    try:
+        completed = subprocess.run(
+            ["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0 and "prefer-dark" in completed.stdout.lower()
+
+
+def resolved_theme(theme_mode: str) -> str:
+    if theme_mode == "auto":
+        return "dark" if system_prefers_dark() else "light"
+    return theme_mode
+
+
+def next_theme_mode(theme_mode: str) -> str:
+    return THEME_MODES[(THEME_MODES.index(theme_mode) + 1) % len(THEME_MODES)]
+
+
+def palette_for(theme_mode: str) -> ThemePalette:
+    return DARK_PALETTE if theme_mode == "dark" else LIGHT_PALETTE
 
 
 def system_cache_directory() -> Path:
@@ -272,12 +371,11 @@ if tk is not None:
             self.transient(parent)
             self.on_saved = on_saved
             self.machines = list(config.machines)
+            self.always_on_top = config.always_on_top
+            self.theme_mode = config.theme_mode
             self.variables = {
                 "query_refresh_seconds": tk.StringVar(
                     value=f"{config.query_refresh_seconds:g}"
-                ),
-                "interface_refresh_seconds": tk.StringVar(
-                    value=f"{config.interface_refresh_seconds:g}"
                 ),
                 "display_columns": tk.StringVar(value=str(config.display_columns)),
                 "remote_eye_command": tk.StringVar(value=config.remote_eye_command),
@@ -291,7 +389,6 @@ if tk is not None:
             general.pack(fill="x")
             fields = (
                 ("query_refresh_seconds", "远端查询周期（秒）"),
-                ("interface_refresh_seconds", "界面/倒计时刷新周期（秒）"),
                 ("display_columns", "期望最大分列数"),
                 ("remote_eye_command", "远端命令"),
                 ("ssh_timeout_seconds", "SSH 超时（秒）"),
@@ -388,6 +485,8 @@ if tk is not None:
             values: dict[str, object] = {
                 key: variable.get() for key, variable in self.variables.items()
             }
+            values["always_on_top"] = self.always_on_top
+            values["theme_mode"] = self.theme_mode
             values["machines"] = [
                 {"name": item.name, "ip": item.ip, "alias": item.alias}
                 for item in self.machines
@@ -406,6 +505,9 @@ if tk is not None:
         def __init__(self, root: tk.Tk, config: DashboardConfig) -> None:
             self.root = root
             self.config = config
+            self.resolved_theme = resolved_theme(config.theme_mode)
+            self.palette = palette_for(self.resolved_theme)
+            self.next_theme_check = time.monotonic() + SYSTEM_THEME_POLL_SECONDS
             self.results: dict[dashboard.Machine, dashboard.MachineResult] = {}
             self.active: dict[Future[dashboard.MachineResult], dashboard.Machine] = {}
             self.last_refresh: datetime | None = None
@@ -416,7 +518,8 @@ if tk is not None:
             root.title("Agent Eye · NPU Dashboard")
             root.geometry("1060x720")
             root.minsize(620, 420)
-            root.configure(background=BACKGROUND)
+            root.configure(background=self.palette.background)
+            root.attributes("-topmost", config.always_on_top)
             root.protocol("WM_DELETE_WINDOW", self.close)
             self._configure_style()
             self._build_interface()
@@ -430,12 +533,80 @@ if tk is not None:
             style = ttk.Style(self.root)
             if "clam" in style.theme_names():
                 style.theme_use("clam")
-            style.configure("Dashboard.TFrame", background=BACKGROUND)
-            style.configure("Panel.TFrame", background=PANEL)
-            style.configure("Title.TLabel", background=BACKGROUND, foreground=CYAN, font=("TkDefaultFont", 18, "bold"))
-            style.configure("Body.TLabel", background=BACKGROUND, foreground=TEXT)
-            style.configure("Muted.TLabel", background=BACKGROUND, foreground=MUTED)
-            style.configure("Panel.TLabel", background=PANEL, foreground=TEXT)
+            palette = self.palette
+            style.configure("TFrame", background=palette.background)
+            style.configure(
+                "TLabel", background=palette.background, foreground=palette.text
+            )
+            style.configure(
+                "TButton",
+                background=palette.panel,
+                foreground=palette.text,
+                bordercolor=palette.muted,
+            )
+            style.map(
+                "TButton",
+                background=[("active", palette.selection)],
+                foreground=[("active", palette.text)],
+            )
+            style.configure(
+                "TCheckbutton", background=palette.background, foreground=palette.text
+            )
+            style.map(
+                "TCheckbutton",
+                background=[("active", palette.background)],
+                foreground=[("active", palette.text)],
+            )
+            style.configure(
+                "TLabelframe",
+                background=palette.background,
+                foreground=palette.text,
+                bordercolor=palette.muted,
+            )
+            style.configure(
+                "TLabelframe.Label",
+                background=palette.background,
+                foreground=palette.text,
+            )
+            style.configure(
+                "TEntry",
+                fieldbackground=palette.panel,
+                foreground=palette.text,
+                insertcolor=palette.text,
+            )
+            style.configure(
+                "Treeview",
+                background=palette.panel,
+                fieldbackground=palette.panel,
+                foreground=palette.text,
+            )
+            style.map(
+                "Treeview",
+                background=[("selected", palette.selection)],
+                foreground=[("selected", palette.text)],
+            )
+            style.configure(
+                "Treeview.Heading",
+                background=palette.background,
+                foreground=palette.text,
+            )
+            style.configure("Dashboard.TFrame", background=palette.background)
+            style.configure("Panel.TFrame", background=palette.panel)
+            style.configure(
+                "Title.TLabel",
+                background=palette.background,
+                foreground=palette.cyan,
+                font=("TkDefaultFont", 18, "bold"),
+            )
+            style.configure(
+                "Body.TLabel", background=palette.background, foreground=palette.text
+            )
+            style.configure(
+                "Muted.TLabel", background=palette.background, foreground=palette.muted
+            )
+            style.configure(
+                "Panel.TLabel", background=palette.panel, foreground=palette.text
+            )
             style.configure("Settings.TButton", padding=(12, 7))
 
         def _build_interface(self) -> None:
@@ -448,15 +619,35 @@ if tk is not None:
                 style="Settings.TButton",
                 command=self.open_settings,
             ).pack(side="right")
+            self.theme_text = tk.StringVar()
+            self._update_theme_button_text()
+            ttk.Button(
+                header,
+                textvariable=self.theme_text,
+                command=self._cycle_theme,
+            ).pack(side="right", padx=(0, 10))
+            self.always_on_top = tk.BooleanVar(value=self.config.always_on_top)
+            ttk.Checkbutton(
+                header,
+                text="窗口置顶",
+                variable=self.always_on_top,
+                command=self._toggle_always_on_top,
+            ).pack(side="right", padx=(0, 12))
 
             self.machine_list = ttk.Frame(self.root, style="Dashboard.TFrame", padding=(18, 4, 18, 8))
             self.machine_list.pack(fill="x")
 
             container = ttk.Frame(self.root, style="Dashboard.TFrame")
             container.pack(fill="both", expand=True, padx=18)
-            self.canvas = tk.Canvas(container, background=BACKGROUND, highlightthickness=0)
+            self.canvas = tk.Canvas(
+                container,
+                background=self.palette.background,
+                highlightthickness=0,
+            )
             scrollbar = ttk.Scrollbar(container, orient="vertical", command=self.canvas.yview)
-            self.cards = tk.Frame(self.canvas, background=BACKGROUND)
+            self.cards = tk.Frame(
+                self.canvas, background=self.palette.background
+            )
             self.cards_window = self.canvas.create_window((0, 0), window=self.cards, anchor="nw")
             self.canvas.configure(yscrollcommand=scrollbar.set)
             self.canvas.pack(side="left", fill="both", expand=True)
@@ -481,13 +672,13 @@ if tk is not None:
 
         def _status_color(self, result: dashboard.MachineResult | None) -> str:
             if result is None:
-                return CYAN
+                return self.palette.cyan
             if result.error:
-                return RED
+                return self.palette.red
             free = sum(row.status == "FREE" for row in result.rows)
             if free == 0:
-                return RED
-            return YELLOW if free <= 3 else GREEN
+                return self.palette.red
+            return self.palette.yellow if free <= 3 else self.palette.green
 
         def _render_machine_list(self) -> None:
             for child in self.machine_list.winfo_children():
@@ -531,7 +722,7 @@ if tk is not None:
             color = self._status_color(result)
             card = tk.Frame(
                 self.cards,
-                background=PANEL,
+                background=self.palette.panel,
                 highlightbackground=color,
                 highlightcolor=color,
                 highlightthickness=2,
@@ -541,21 +732,27 @@ if tk is not None:
             header = tk.Label(
                 card,
                 text=f"{machine.label}     free: {dashboard._availability(result)}",
-                background=PANEL,
+                background=self.palette.panel,
                 foreground=color,
                 font=("TkDefaultFont", 11, "bold"),
             )
             header.pack(fill="x", pady=(0, 8))
             if result is None:
                 text = "正在查询..." if self.active else "等待查询..."
-                tk.Label(card, text=text, background=PANEL, foreground=MUTED, anchor="w").pack(fill="x")
+                tk.Label(
+                    card,
+                    text=text,
+                    background=self.palette.panel,
+                    foreground=self.palette.muted,
+                    anchor="w",
+                ).pack(fill="x")
                 return card
             if result.error:
                 tk.Label(
                     card,
                     text=f"ERROR: {result.error}",
-                    background=PANEL,
-                    foreground=RED,
+                    background=self.palette.panel,
+                    foreground=self.palette.red,
                     anchor="w",
                     justify="left",
                     wraplength=480,
@@ -570,19 +767,21 @@ if tk is not None:
                 tk.Label(
                     table,
                     text=title,
-                    background=PANEL,
+                    background=self.palette.panel,
                     foreground=color,
                     anchor="w",
                     padx=7,
                     pady=4,
                 ).grid(row=0, column=column, sticky="nsew", padx=1, pady=1)
             for row_index, row in enumerate(result.rows, start=1):
-                content_color = BLUE if row.status == "FREE" else RED
+                content_color = (
+                    self.palette.blue if row.status == "FREE" else self.palette.red
+                )
                 for column, value in enumerate((f"NPU {row.npu_id}", row.display_status)):
                     tk.Label(
                         table,
                         text=value,
-                        background=PANEL,
+                        background=self.palette.panel,
                         foreground=content_color,
                         anchor="w",
                         padx=7,
@@ -593,7 +792,7 @@ if tk is not None:
         def _render_footer(self) -> None:
             refresh = "正在查询" if self.active else f"{max(0.0, self.next_refresh - time.monotonic()):.1f}s"
             self.footer_text.set(
-                f"Last refresh: {dashboard._format_time(self.last_refresh)}  |  "
+                f"Last refresh: {dashboard._format_time(self.last_refresh)}\n"
                 f"Next refresh: {refresh}/{self.config.query_refresh_seconds:g}s"
             )
 
@@ -601,6 +800,42 @@ if tk is not None:
             self._render_machine_list()
             self._render_cards()
             self._render_footer()
+
+        def _update_theme_button_text(self) -> None:
+            self.theme_text.set(f"主题：{THEME_LABELS[self.config.theme_mode]}")
+
+        def _apply_theme(self, resolved: str) -> None:
+            self.resolved_theme = resolved
+            self.palette = palette_for(resolved)
+            self.root.configure(background=self.palette.background)
+            self._configure_style()
+            self.canvas.configure(background=self.palette.background)
+            self.cards.configure(background=self.palette.background)
+            self._update_theme_button_text()
+            self._render_all()
+
+        def _cycle_theme(self) -> None:
+            updated = replace(
+                self.config,
+                theme_mode=next_theme_mode(self.config.theme_mode),
+            )
+            try:
+                save_config(updated)
+            except OSError as exc:
+                messagebox.showerror("保存设置失败", str(exc), parent=self.root)
+                return
+            self.config = updated
+            self.next_theme_check = time.monotonic() + SYSTEM_THEME_POLL_SECONDS
+            self._apply_theme(resolved_theme(updated.theme_mode))
+
+        def _follow_system_theme(self) -> None:
+            now = time.monotonic()
+            if self.config.theme_mode != "auto" or now < self.next_theme_check:
+                return
+            self.next_theme_check = now + SYSTEM_THEME_POLL_SECONDS
+            current = resolved_theme("auto")
+            if current != self.resolved_theme:
+                self._apply_theme(current)
 
         def _start_query(self) -> None:
             if self.active or not self.config.machines:
@@ -635,19 +870,38 @@ if tk is not None:
                 self._render_cards()
 
         def _tick(self) -> None:
+            self._follow_system_theme()
             self._collect_results()
             if not self.active and time.monotonic() >= self.next_refresh:
                 self._start_query()
             self._render_footer()
-            delay = max(50, int(self.config.interface_refresh_seconds * 1000))
-            self.after_id = self.root.after(delay, self._tick)
+            self.after_id = self.root.after(TK_POLL_MILLISECONDS, self._tick)
 
         def open_settings(self) -> None:
             SettingsDialog(self.root, self.config, self.apply_config)
 
+        def _toggle_always_on_top(self) -> None:
+            enabled = self.always_on_top.get()
+            self.root.attributes("-topmost", enabled)
+            updated = replace(self.config, always_on_top=enabled)
+            try:
+                save_config(updated)
+            except OSError as exc:
+                self.always_on_top.set(self.config.always_on_top)
+                self.root.attributes("-topmost", self.config.always_on_top)
+                messagebox.showerror(
+                    "保存设置失败", str(exc), parent=self.root
+                )
+                return
+            self.config = updated
+
         def apply_config(self, config: DashboardConfig) -> None:
             old_executor = self.executor
             self.config = config
+            self.always_on_top.set(config.always_on_top)
+            self.root.attributes("-topmost", config.always_on_top)
+            self.next_theme_check = time.monotonic() + SYSTEM_THEME_POLL_SECONDS
+            self._apply_theme(resolved_theme(config.theme_mode))
             self.executor = self._new_executor()
             self.active.clear()
             self.results.clear()

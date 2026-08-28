@@ -78,7 +78,9 @@ class NpuRow:
         if self.status == "FREE":
             return "FREE"
         process = self.process_type or "UNKNOWN"
-        owner = self.owner_id or "未知运行者"
+        owner = (
+            f"可能是 {self.owner_id} " if self.owner_id else "未知运行者"
+        )
         return f"{process}（{owner}）"
 
 
@@ -371,11 +373,18 @@ def render_dashboard(
     refresh_text = (
         "正在查询" if querying else f"{max(0.0, seconds_to_refresh):.1f}s"
     )
-    footer = (
-        f"Last refresh: {_format_time(last_refresh)}  |  "
-        f"Next refresh: {refresh_text}/{QUERY_REFRESH_SECONDS:g}s"
+    lines.append(
+        _paint(_clip(f"Last refresh: {_format_time(last_refresh)}", width), _DIM)
     )
-    lines.append(_paint(_clip(footer, width), _DIM))
+    lines.append(
+        _paint(
+            _clip(
+                f"Next refresh: {refresh_text}/{QUERY_REFRESH_SECONDS:g}s",
+                width,
+            ),
+            _DIM,
+        )
+    )
     return "\n".join(lines)
 
 

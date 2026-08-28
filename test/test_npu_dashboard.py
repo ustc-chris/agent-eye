@@ -18,7 +18,7 @@ Welcome to server
         rows = npu_dashboard.parse_eye_output(output)
         self.assertEqual([row.npu_id for row in rows], [0, 1, 2])
         self.assertEqual(rows[0].display_status, "FREE")
-        self.assertEqual(rows[1].display_status, "VLLM（z50064016）")
+        self.assertEqual(rows[1].display_status, "VLLM（可能是 z50064016 ）")
         self.assertEqual(rows[2].display_status, "VLLM（未知运行者）")
 
     @patch("npu_dashboard.subprocess.run")
@@ -57,8 +57,10 @@ Welcome to server
         self.assertIn("NPU 0", rendered)
         self.assertIn("FREE", rendered)
         self.assertIn("ERROR: 连接失败", rendered)
-        self.assertIn("Last refresh: 等待首次查询", rendered)
-        self.assertIn("Next refresh: 5.0s/20s", rendered)
+        self.assertIn(
+            "Last refresh: 等待首次查询\nNext refresh: 5.0s/20s",
+            rendered,
+        )
 
     def test_narrow_terminal_reduces_configured_columns(self) -> None:
         machines = tuple(
